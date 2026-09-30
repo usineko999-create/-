@@ -11,16 +11,14 @@ st.set_page_config(page_title="正誤クイズアプリ", page_icon="📝", layo
 CREDENTIALS_FILE = "secret_key.json"
 SPREADSHEET_KEY = "1NHaNYmOv9TOXdmaDmWbVmIa3RFsXkXhVUYkFgASHtTk"
 
-# クラウド（Streamlit Cloud）とローカル（PC）の両方に対応した高速接続関数
+# クラウドとローカルの両方に対応した高速接続関数
 @st.cache_resource
 def get_worksheet():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     
-    # 1. クラウド（Streamlit Community Cloud）環境の場合
     if "gcp_service_account" in st.secrets:
         creds_dict = json.loads(st.secrets["gcp_service_account"])
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    # 2. ローカルPC環境の場合
     else:
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
         
@@ -29,7 +27,7 @@ def get_worksheet():
 
 # --- セッション状態の初期化 ---
 if 'stage' not in st.session_state:
-    st.session_state.stage = 'setup' # 'setup' or 'quiz' or 'result'
+    st.session_state.stage = 'setup'
 if 'questions' not in st.session_state:
     st.session_state.questions = []
 if 'current_idx' not in st.session_state:
@@ -83,7 +81,6 @@ if st.session_state.stage == 'setup':
     selected_mode = st.radio("出題モードを選択", modes)
     
     if st.button("クイズスタート！", type="primary"):
-        # フィルタリング処理
         target_df = df.copy()
         
         if selected_category != "全範囲":
@@ -170,6 +167,19 @@ elif st.session_state.stage == 'quiz':
             if st.button("結果画面へ", type="primary"):
                 st.session_state.stage = 'result'
                 st.rerun()
+
+    # --- 追加：中断して保存ボタン ---
+    st.markdown("---")
+    if st.button("⏸️ 中断してここまでの記録を保存", use_container_width=True):
+        if st.session_state.pending_updates:
+            with st.spinner("ここまでの学習記録を保存しています..."):
+                for row, count in st.session_state.pending_updates.items():
+                    worksheet.update_cell(row, 5, count)
+            st.session_state.pending_updates = {}
+        
+        # 設定画面に戻る
+        st.session_state.stage = 'setup'
+        st.rerun()
 
 # ==========================================
 # 結果画面 (stage: result)
