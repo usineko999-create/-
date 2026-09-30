@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+import json
 
 # --- ページ設定 ---
 st.set_page_config(page_title="正誤クイズアプリ", page_icon="📝", layout="centered")
@@ -10,11 +11,19 @@ st.set_page_config(page_title="正誤クイズアプリ", page_icon="📝", layo
 CREDENTIALS_FILE = "secret_key.json"
 SPREADSHEET_KEY = "1NHaNYmOv9TOXdmaDmWbVmIa3RFsXkXhVUYkFgASHtTk"
 
-# 【高速化1】接続情報をキャッシュ（記憶）し、毎回通信するのを防ぐ
+# クラウド（Streamlit Cloud）とローカル（PC）の両方に対応した高速接続関数
 @st.cache_resource
 def get_worksheet():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+    
+    # 1. クラウド（Streamlit Community Cloud）環境の場合
+    if "gcp_service_account" in st.secrets:
+        creds_dict = json.loads(st.secrets["gcp_service_account"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    # 2. ローカルPC環境の場合
+    else:
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        
     client = gspread.authorize(creds)
     return client.open_by_key(SPREADSHEET_KEY).sheet1
 
@@ -29,36 +38,14 @@ if 'answered' not in st.session_state:
     st.session_state.answered = False
 if 'is_correct' not in st.session_state:
     st.session_state.is_correct = False
-# 【追加】更新データを一時保存するリスト
 if 'pending_updates' not in st.session_state:
     st.session_state.pending_updates = {}
 
 st.title("📝 正誤クイズ学習アプリ")
 
-# ワークシートの取得（キャッシュされるため高速）
+# ワークシートの取得
 try:
-    worksheet = # 【追加】jsonモジュールをインポート（ファイルの先頭付近のimport群に追加してください）
-import json
-
-# （中略：ページ設定やSPREADSHEET_KEYの指定などはそのまま）
-
-# 【修正】クラウドとローカルの両方に対応した接続関数
-@st.cache_resource
-def get_worksheet():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    
-    # 1. クラウド（Streamlit Community Cloud）で動かす場合
-    if "gcp_service_account" in st.secrets:
-        # Streamlitの安全な金庫（Secrets）から鍵情報を読み込む
-        creds_dict = json.loads(st.secrets["gcp_service_account"])
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        
-    # 2. ローカルPCで動かす場合（今まで通り）
-    else:
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-        
-    client = gspread.authorize(creds)
-    return client.open_by_key(SPREADSHEET_KEY).sheet1
+    worksheet = get_worksheet()
 except Exception as e:
     st.error(f"スプレッドシートの接続に失敗しました。\nエラー内容: {e}")
     st.stop()
@@ -69,7 +56,6 @@ except Exception as e:
 if st.session_state.stage == 'setup':
     st.subheader("出題設定")
     
-    # 【高速化2】データの全件読み込みは設定画面を開いた時だけ行う
     with st.spinner("問題データを読み込んでいます..."):
         data = worksheet.get_all_records()
         df = pd.DataFrame(data)
@@ -118,7 +104,7 @@ if st.session_state.stage == 'setup':
             st.session_state.questions = target_df.to_dict('records')
             st.session_state.current_idx = 0
             st.session_state.answered = False
-            st.session_state.pending_updates = {} # 更新リストをリセット
+            st.session_state.pending_updates = {}
             st.session_state.stage = 'quiz'
             st.rerun()
 
@@ -145,12 +131,10 @@ elif st.session_state.stage == 'quiz':
         else:
             st.session_state.is_correct = False
             
-            # 【高速化3】ここでは書き込まず、更新予定リストにメモだけ残す
             new_count = int(current_q['間違えた回数']) + 1
             row = int(current_q['row_num'])
             st.session_state.pending_updates[row] = new_count
             
-            # 画面表示用に現在のデータだけ更新
             st.session_state.questions[st.session_state.current_idx]['間違えた回数'] = new_count
             
         st.session_state.answered = True
@@ -194,13 +178,12 @@ elif st.session_state.stage == 'result':
     st.balloons()
     st.subheader("お疲れ様でした！全問終了です。")
     
-    # 【追加】溜まっていた「間違えた回数」をここで一気に書き込む
     if st.session_state.pending_updates:
         with st.spinner("学習記録を保存しています..."):
             for row, count in st.session_state.pending_updates.items():
-                worksheet.update_cell(row, 5, count) # E列を更新
+                worksheet.update_cell(row, 5, count)
         st.success("学習記録がスプレッドシートに保存されました！")
-        st.session_state.pending_updates = {} # クリア
+        st.session_state.pending_updates = {}
         
     if st.button("設定画面に戻る"):
         st.session_state.stage = 'setup'
