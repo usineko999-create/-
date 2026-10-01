@@ -9,16 +9,16 @@ st.set_page_config(page_title="正誤クイズアプリ", page_icon="📝", layo
 
 # --- Googleスプレッドシート連携の設定 ---
 CREDENTIALS_FILE = "secret_key.json"
-DEFAULT_SPREADSHEET_KEY = "1NHaNYmOv9TOXdmaDmWbVmIa3RFsXkXhVUYkFgASHtTk"
 
-# 6つの科目の設定
-SUBJECTS = {
-    "特許・実用新案": {"key": DEFAULT_SPREADSHEET_KEY, "sheet": "特許・実用新案"},
-    "意匠": {"key": DEFAULT_SPREADSHEET_KEY, "sheet": "意匠"},
-    "商標": {"key": DEFAULT_SPREADSHEET_KEY, "sheet": "商標"},
-    "協定・条約": {"key": DEFAULT_SPREADSHEET_KEY, "sheet": "協定・条約"},
-    "不正競争・著作権": {"key": DEFAULT_SPREADSHEET_KEY, "sheet": "不正競争・著作権"},
-    "全問題": {"key": DEFAULT_SPREADSHEET_KEY, "sheet": "全問題"}
+# 【修正】各科目のスプレッドシートファイルごとのキー（ID）を設定します
+# ※実際のURLのID部分にすべて書き換えてください
+SPREADSHEET_KEYS = {
+    "特許・実用新案": "1rrzp90pSYL4YxSJEEtkFB4HZsIi9n3SUsoUX1qEN5XQ", 
+    "意匠": "1hOTVzkr82pqjh_KaoHxV7Zd-dczFtlVdu_DMT-FvNVM",
+    "商標": "1I0HMXWY6CU9mQJWEBdJXn47Xv2_ErdLdTSZ1xxm3AG4",
+    "協定・条約": "1fH1naJGQfKXseXpHrVFnC9ip93YURgCMD67xPhbUEjQ",
+    "不正競争・著作権": "1w9AITUq-3HF53slPwFr83jOhws3kmVVy6dOfqHFHN9c",
+    "全問題": "1NHaNYmOv9TOXdmaDmWbVmIa3RFsXkXhVUYkFgASHtTk"
 }
 
 @st.cache_resource
@@ -50,7 +50,7 @@ if 'pending_updates' not in st.session_state:
     st.session_state.pending_updates = {}
 
 # ==========================================
-# 同期保存用の共通関数（ここが今回のキモです）
+# 複数ファイル間の同期保存処理
 # ==========================================
 def save_learning_records():
     if not st.session_state.pending_updates:
@@ -58,33 +58,33 @@ def save_learning_records():
         
     client = get_gspread_client()
     current_subj = st.session_state.selected_subject_name
-    current_info = SUBJECTS[current_subj]
+    current_key = SPREADSHEET_KEYS[current_subj]
     
-    # 1. 現在学習中のシートを更新
-    current_ws = client.open_by_key(current_info["key"]).worksheet(current_info["sheet"])
+    # 1. 現在学習中のファイルを更新（各ファイルの1つ目のシートを使用）
+    current_ws = client.open_by_key(current_key).sheet1
     for q_text, data in st.session_state.pending_updates.items():
         current_ws.update_cell(data['row_num'], 5, data['count'])
         
-    # 2. 他のシートへ同期（問題文をB列から検索して合致する行を更新）
+    # 2. 他のファイルへ同期（問題文をB列から検索して合致する行を更新）
     if current_subj != "全問題":
-        # 科目別シートを使用中の場合 -> 「全問題」シートへ同期
+        # 科目別ファイルを使用中の場合 -> 「全問題」ファイルへ同期
         try:
-            sync_ws = client.open_by_key(SUBJECTS["全問題"]["key"]).worksheet("全問題")
+            sync_ws = client.open_by_key(SPREADSHEET_KEYS["全問題"]).sheet1
             q_col = sync_ws.col_values(2) # B列（問題文）を取得
             for q_text, data in st.session_state.pending_updates.items():
                 if q_text in q_col:
-                    sync_row = q_col.index(q_text) + 1 # 1行目から始まるため+1
+                    sync_row = q_col.index(q_text) + 1 
                     sync_ws.update_cell(sync_row, 5, data['count'])
         except Exception as e:
-            pass # シートが無いなどのエラー時はスキップ
+            pass # 該当ファイルや問題が無い場合はスキップ
     else:
-        # 「全問題」シートを使用中の場合 -> 各科目別シートへ同期
+        # 「全問題」ファイルを使用中の場合 -> 各科目別ファイルへ同期
         remaining = list(st.session_state.pending_updates.keys())
-        for subj_name in SUBJECTS.keys():
+        for subj_name, subj_key in SPREADSHEET_KEYS.items():
             if subj_name == "全問題" or not remaining:
                 continue
             try:
-                sync_ws = client.open_by_key(SUBJECTS[subj_name]["key"]).worksheet(SUBJECTS[subj_name]["sheet"])
+                sync_ws = client.open_by_key(subj_key).sheet1
                 q_col = sync_ws.col_values(2)
                 found = []
                 for q_text in remaining:
@@ -92,13 +92,11 @@ def save_learning_records():
                         sync_row = q_col.index(q_text) + 1
                         sync_ws.update_cell(sync_row, 5, st.session_state.pending_updates[q_text]['count'])
                         found.append(q_text)
-                # 見つかった問題は以降のシート探索から除外（高速化）
                 for f in found:
                     remaining.remove(f)
             except Exception:
                 continue
                 
-    # 保存完了後にリストをリセット
     st.session_state.pending_updates = {}
 
 # --- メインUI ---
@@ -112,7 +110,7 @@ if st.session_state.stage == 'select_subject':
     
     selected_subject = st.radio(
         "学習する科目を選んでください", 
-        list(SUBJECTS.keys()), 
+        list(SPREADSHEET_KEYS.keys()), 
         index=0
     )
     
@@ -120,9 +118,10 @@ if st.session_state.stage == 'select_subject':
         try:
             with st.spinner(f"「{selected_subject}」のデータを読み込んでいます..."):
                 client = get_gspread_client()
-                subject_info = SUBJECTS[selected_subject]
+                target_key = SPREADSHEET_KEYS[selected_subject]
                 
-                worksheet = client.open_by_key(subject_info["key"]).worksheet(subject_info["sheet"])
+                # 選択された科目のファイルを開き、1つ目のシートのデータを取得
+                worksheet = client.open_by_key(target_key).sheet1
                 data = worksheet.get_all_records()
                 df = pd.DataFrame(data)
                 
@@ -144,10 +143,8 @@ if st.session_state.stage == 'select_subject':
                 st.session_state.stage = 'setup'
                 st.rerun()
                 
-        except gspread.exceptions.WorksheetNotFound:
-            st.error(f"スプレッドシート内に「{subject_info['sheet']}」という名前のシートが見つかりません。")
         except Exception as e:
-            st.error(f"データの読み込みに失敗しました。\nエラー内容: {e}")
+            st.error(f"データの読み込みに失敗しました。設定したキーが正しいか、ロボットがファイルに招待されているか確認してください。\nエラー内容: {e}")
 
 # ==========================================
 # 設定画面 (stage: setup)
@@ -225,8 +222,6 @@ elif st.session_state.stage == 'quiz':
             
             new_count = int(current_q['間違えた回数']) + 1
             row = int(current_q['row_num'])
-            
-            # 【変更】行番号だけでなく、問題文をキーにして同期用に記憶しておく
             q_text = str(current_q['問題']).strip()
             st.session_state.pending_updates[q_text] = {'row_num': row, 'count': new_count}
             
@@ -267,7 +262,7 @@ elif st.session_state.stage == 'quiz':
     st.markdown("---")
     if st.button("⏸️ 中断してここまでの記録を保存", use_container_width=True):
         if st.session_state.pending_updates:
-            with st.spinner("シートを跨いで学習記録を同期保存しています..."):
+            with st.spinner("ファイル間で学習記録を同期保存しています..."):
                 save_learning_records()
         st.session_state.stage = 'select_subject'
         st.rerun()
@@ -280,9 +275,9 @@ elif st.session_state.stage == 'result':
     st.subheader("お疲れ様でした！全問終了です。")
     
     if st.session_state.pending_updates:
-        with st.spinner("シートを跨いで学習記録を同期保存しています..."):
+        with st.spinner("ファイル間で学習記録を同期保存しています..."):
             save_learning_records()
-        st.success("すべてのシートに学習記録が保存・同期されました！")
+        st.success("すべてのファイルに学習記録が保存・同期されました！")
         
     if st.button("科目選択に戻る"):
         st.session_state.stage = 'select_subject'
